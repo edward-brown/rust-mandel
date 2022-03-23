@@ -4,15 +4,19 @@ use image::png::PNGEncoder;
 use std::fs::File;
 use std::time::Instant;
 
+// Threads
+use std::thread;
+
 fn main() {
     let now = Instant::now();
 
-    let bounds = (1920, 1920);
+    let num_threads = thread::available_parallelism().expect("Failed to fetch num_threads");
+    let bounds = (50000, 50000);
     let top_left = Complex { re: -2.0, im: 2.0 };
     let bottom_right = Complex { re: 1.0, im: -2.0 };
 
     let mut pixel_data = vec![0; bounds.0 * bounds.1 * 3];
-    render(bounds.0, bounds.1, top_left, bottom_right, &mut pixel_data);
+    render_threaded(usize::from(num_threads), bounds, (top_left, bottom_right), &mut pixel_data);
     write_image("output.png", &pixel_data, bounds)
         .expect("Error writing file");
 
@@ -28,7 +32,67 @@ fn write_image(filename: &str, pixel_data: &[u8], bounds: (usize, usize)) -> Res
     Ok(())
 }
 
+fn render_threaded(num_threads: usize, bounds: (usize, usize), space: (Complex<f64>, Complex<f64>), pixel_data: &mut [u8])  {
+    let box_size = bounds.1 / num_threads;
+    let bands: Vec<&mut [u8]> = pixel_data.chunks_mut(box_size * bounds.0 * 3).collect();
+
+    crossbeam::scope(|s| {
+        for (i, band) in bands.into_iter().enumerate() {
+            s.spawn(move |_| {
+                let start_pos = i * box_size;
+        
+                // Pixel Color Mapping
+                let mapping: [[u8; 3]; 16] = [
+                    [66, 30, 15],
+                    [25, 7, 26],
+                    [9, 1, 47],
+                    [4, 4, 73],
+                    [0, 7, 100],
+                    [12, 44, 138],
+                    [24, 82, 177],
+                    [57, 125, 209],
+                    [134, 181, 229],
+                    [211, 236, 248],
+                    [241, 233, 191],
+                    [248, 201, 95],
+                    [255, 170, 0],
+                    [204, 128, 0],
+                    [153, 87, 0],
+                    [0, 0, 0]
+                ];
+        
+                let mut count = 0;
+                for h in start_pos..(start_pos + box_size) {
+                    for w in 0..bounds.0 {
+                        // Get pixel pos & iteration count
+                        let c = pixel_to_mandelspace((w, h), bounds, space.0, space.1);
+                        let ic = iteration_count(c);
+        
+                        let mut r = 0;
+                        let mut g = 0;
+                        let mut b = 0;
+        
+                        if ic != 0 {
+                            let map = ic % 16;
+                            r = mapping[map as usize][0];
+                            g = mapping[map as usize][1];
+                            b = mapping[map as usize][2];
+                        }
+        
+                        // Set pixel data
+                        band[count + 0] = r as u8;
+                        band[count + 1] = g as u8;
+                        band[count + 2] = b as u8;
+                        count += 3;
+                    }
+                }
+            });
+        }
+    }).expect("Error rendering image");
+}
+
 fn render(width: usize, height: usize, top_left: Complex<f64>, bottom_right: Complex<f64>, pixel_data: &mut [u8]) {
+    // Pixel Color Mapping
     let mapping: [[u8; 3]; 16] = [
         [66, 30, 15],
         [25, 7, 26],
@@ -47,7 +111,7 @@ fn render(width: usize, height: usize, top_left: Complex<f64>, bottom_right: Com
         [153, 87, 0],
         [0, 0, 0]
     ];
-
+    
     let mut count = 0;
     for h in 0..height {
         for w in 0..width {
